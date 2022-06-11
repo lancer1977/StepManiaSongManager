@@ -28,7 +28,7 @@ public class PlayList
             .Subscribe();
     }
 
-    public PlayList(string name, IEnumerable<Song> songs):this()
+    public PlayList(string name, IEnumerable<Song> songs) : this()
     {
         Name = name;
         _sourceItems.AddRange(songs);
@@ -44,16 +44,7 @@ public class PlayList
         _sourceItems.Remove(song);
     }
 
-    public static async Task<PlayList?> ParsePlayList(string directoryName)
-    {
-        var playList = new PlayList();
-        if (!Directory.Exists(directoryName)) return null;
-        playList.Name = directoryName.Substring(directoryName.LastIndexOf('\\') + 1);
-        playList.FolderName = directoryName;
-        await playList.Refresh();
 
-        return playList;
-    }
 
     public async Task Refresh()
     {

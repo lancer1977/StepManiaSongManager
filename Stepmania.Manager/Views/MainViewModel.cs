@@ -64,17 +64,7 @@ public class MainViewModel : ViewModelBase
             .Subscribe();
         this.WhenAnyValue(x => x.SelectedPlayList).Subscribe(FindDuplicates);
         connection.CountChanged().ManySelect(x => true).ToPropertyEx(this, x => x.IsLoaded);
-        CreatePlayListCommand = ReactiveCommand.CreateFromTask(async () =>
-        {
-            if (string.IsNullOrEmpty(StepManiaFolder)) return;
-            var result = await _dialogService.GetString("Playlist Name");
-            var path = Path.Combine(StepManiaFolder, "Songs");
-            path = Path.Combine(path, result);
-            Directory.CreateDirectory(path);
-            var playList = await PlayList.ParsePlayList(path);
-            if (playList == null) return;
-            _sourceItems.Add(playList);
-        });
+        CreatePlayListCommand = ReactiveCommand.CreateFromTask(CreatePlaylist);
         ReactiveUIExtensions.RegisterErrorCallback(async (x, y) =>
         {
             Debug.WriteLine(x + y + "");
@@ -89,7 +79,8 @@ public class MainViewModel : ViewModelBase
             if (await _dialogService.GetConfirmation("Are you sure you want to delete this song?"))
             {
                 FileExtensions.DeleteFolder(x.RootDirectory);
-                await SelectedPlayList.Refresh();
+                if (SelectedPlayList != null)
+                    await SelectedPlayList.Refresh();
             };
         }).OnException();
         ReplaceOggCommand = ReactiveCommand.CreateFromTask<Song>(ReplaceOgg).OnException("Player Errored");
@@ -122,6 +113,13 @@ public class MainViewModel : ViewModelBase
         StepManiaFolder = "F:\\FakeStepMania";
     }
 
+    private async Task CreatePlaylist()
+    {
+        var result = await PlayListActions.CreatePlayList(StepManiaFolder, _dialogService);
+        if (result != null)
+            _sourceItems.Add(result);
+    }
+
     private void SearchAction()
     {
         var songs = Items.SelectMany(x => x.Items).Where(x => x.Title.SafeContains(SearchText) || x.ArtistName.SafeContains(SearchText));
@@ -134,13 +132,12 @@ public class MainViewModel : ViewModelBase
     {
         try
         {
-            var result = await FileExtensions.SwapOgg(song);
+            await FileExtensions.SwapOgg(song);
         }
         catch (Exception ex)
         {
             Debug.WriteLine(ex.Message);
         }
-
     }
 
 
@@ -164,9 +161,6 @@ public class MainViewModel : ViewModelBase
         {
             Debug.WriteLine(ex.Message);
         }
-
-
-
     }
     private async Task ReplaceAllOgg()
     {
@@ -235,7 +229,7 @@ public class MainViewModel : ViewModelBase
         if (Directory.Exists(directory))
         {
 
-            var items = await GetPlayLists(directory);
+            var items = await PlayListActions.GetPlayLists(directory);
             _sourceItems.Edit(x =>
             {
                 x.Clear();
@@ -246,15 +240,13 @@ public class MainViewModel : ViewModelBase
 
 
 
-
-    public async Task<List<PlayList>> GetPlayLists(string directoryName)
+    public async Task SyncSongs(string source, string destination)
     {
-        var list = new List<PlayList>();
-        var directories = Directory.GetDirectories(directoryName);
-        foreach (var item in directories)
-        {
-            list.Add(await PlayList.ParsePlayList(item));
-        }
-        return list;
+        //1. Get a list of source directories
+        //2. Get a list of destination directories
+        //
+        //var sourceDirectories = 
     }
+
 }
+
