@@ -1,16 +1,18 @@
-﻿using System;
-using System.Diagnostics;
-using System.Windows.Input;
+using DryIoc;
 using PolyhydraGames.Core.ReactiveUI;
 using PolyhydraGames.Extensions;
-using Prism.Services.Dialogs;
+using Prism.Dialogs;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
+using System;
+using System.Diagnostics;
+using System.Windows.Input;
 
 namespace Stepmania.Manager.Dialogs.Confirmation;
 
-public class ConfirmDialogViewModel : ViewModelBase, IDialogAware
+public class ConfirmDialogViewModel : ViewModelAsyncBase, IDialogAware
 {
+    private DialogCloseListener _requestClose;
     public ICommand CloseDialogCommand { get; }
     [Reactive] public string Title { get; set; }
     [Reactive] public string Message { get; set; }
@@ -27,7 +29,7 @@ public class ConfirmDialogViewModel : ViewModelBase, IDialogAware
 
     public void OnDialogClosed()
     {
-
+        _requestClose.Invoke();
     }
 
     public void OnDialogOpened(IDialogParameters parameters)
@@ -36,14 +38,21 @@ public class ConfirmDialogViewModel : ViewModelBase, IDialogAware
         Title = parameters.GetValue<string>(nameof(Title));
     }
 
+    DialogCloseListener IDialogAware.RequestClose => _requestClose;
+
 
 
     protected virtual void CloseDialog(string response)
     {
         try
         {
-            var result = ButtonResult.OK;
-            RaiseRequestClose(new DialogResult(result, new DialogParameters($"{nameof(response)}={response.ToBool()}")));
+            //var result = ButtonResult.OK;
+            var result = new DialogResult(ButtonResult.OK)
+            {
+                Parameters = new DialogParameters($"{nameof(response)}={response.ToBool()}")
+            };
+            
+            RaiseRequestClose(result);
         }
         catch (Exception ex)
         {

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
@@ -11,7 +11,7 @@ using System.Windows.Input;
 using DynamicData;
 using DynamicData.Binding;
 using PolyhydraGames.Core.ReactiveUI;
-using Prism.Services.Dialogs;
+using Prism.Dialogs;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using Stepmania.Manager.Dialogs;
@@ -21,7 +21,7 @@ using Stepmania.Manager.Services;
 
 namespace Stepmania.Manager.Views;
 
-public class MainViewModel : ViewModelBase
+public class MainViewModel : ViewModelAsyncBase
 {
     private readonly IDialogService _dialogService;
     private readonly IMediaPlayer _mediaPlayer;
@@ -38,21 +38,42 @@ public class MainViewModel : ViewModelBase
     public ICommand PlayCommand { get; }
     public ICommand DWICleanupCommand { get; }
     public ICommand CreatePlayListCommand { get; }
+    public ICommand DuplicateAsSmsModdedCommand { get; }
+    public ICommand RemoveJumpsCommand { get; }
 
     public bool IsLoaded { [ObservableAsProperty] get; }
+    /// <summary>StepMania Instance root path (the installation you are editing).</summary>
     [Reactive] public string StepManiaFolder { get; set; }
+    /// <summary>Song Repository root path (independent store of songs, e.g. network folder).</summary>
+    [Reactive] public string SongRepositoryFolder { get; set; }
     [Reactive] public string SearchText { get; set; }
     [Reactive] public PlayList MovingPlayListSelection { get; set; }
     [Reactive] public PlayList SelectedPlayList { get; set; }
+    [Reactive] public PlayList SelectedRepositoryPlayList { get; set; }
 
     private SourceList<PlayList> _sourceItems { get; } = new SourceList<PlayList>();
     public ReadOnlyObservableCollection<PlayList> _items;
     public ReadOnlyObservableCollection<PlayList> Items => _items;
 
+    private SourceList<PlayList> _repositorySourceItems { get; } = new SourceList<PlayList>();
+    public ReadOnlyObservableCollection<PlayList> _repositoryItems;
+    public ReadOnlyObservableCollection<PlayList> RepositoryItems => _repositoryItems;
+
+    /// <summary>Songs currently displayed (from instance playlist or repository category).</summary>
+    public ReadOnlyObservableCollection<Song> DisplayedSongs => SelectedRepositoryPlayList?.Items ?? SelectedPlayList?.Items ?? EmptySongs;
+    /// <summary>Title for the current view (playlist or repository category name).</summary>
+    public string DisplayedTitle => SelectedRepositoryPlayList != null ? "Repository: " + SelectedRepositoryPlayList.Name : SelectedPlayList?.Name ?? "";
+    /// <summary>True when viewing a repository category (read-only store).</summary>
+    public bool IsRepositoryView => SelectedRepositoryPlayList != null;
+
+    public ICommand RefreshRepositoryCommand { get; }
+    public ICommand CopyFromRepositoryToInstanceCommand { get; }
+
+
+    private static readonly ReadOnlyObservableCollection<Song> EmptySongs = new ReadOnlyObservableCollection<Song>(new ObservableCollection<Song>());
 
     public MainViewModel(IDialogService dialogService, IMediaPlayer mediaPlayer)
     {
-        DialogServiceExtensions.DialogSerivce = dialogService;
         _dialogService = dialogService;
         _mediaPlayer = mediaPlayer;
         var connection = _sourceItems.Connect();
@@ -62,14 +83,30 @@ public class MainViewModel : ViewModelBase
             .ObserveOn(RxApp.MainThreadScheduler)
             .Bind(out _items)
             .Subscribe();
+
+        var repoConnection = _repositorySourceItems.Connect();
+        repoConnection
+            .Sort(SortExpressionComparer<PlayList>.Ascending(x => x.Name))
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Bind(out _repositoryItems)
+            .Subscribe();
+
         this.WhenAnyValue(x => x.SelectedPlayList).Subscribe(FindDuplicates);
+        this.WhenAnyValue(x => x.SelectedPlayList).Where(x => x != null).Subscribe(_ => SelectedRepositoryPlayList = null);
+        this.WhenAnyValue(x => x.SelectedRepositoryPlayList).Where(x => x != null).Subscribe(_ => SelectedPlayList = null);
+        this.WhenAnyValue(x => x.SelectedPlayList, x => x.SelectedRepositoryPlayList).Subscribe(_ =>
+        {
+            this.RaisePropertyChanged(nameof(DisplayedSongs));
+            this.RaisePropertyChanged(nameof(DisplayedTitle));
+            this.RaisePropertyChanged(nameof(IsRepositoryView));
+        });
         connection.CountChanged().ManySelect(x => true).ToPropertyEx(this, x => x.IsLoaded);
         CreatePlayListCommand = ReactiveCommand.CreateFromTask(CreatePlaylist);
-        ReactiveUIExtensions.RegisterErrorCallback(async (x, y) =>
-        {
-            Debug.WriteLine(x + y + "");
-            await dialogService.GetString(x);
-        });
+        //ReactiveUIExtensions.RegisterErrorCallback(async (x, y) =>
+        //{
+        //    Debug.WriteLine(x + y + "");
+        //    await dialogService.GetString(x);
+        //});
 
         DWICleanupCommand = ReactiveCommand.Create(DWICleanup);
         SearchCommand = ReactiveCommand.Create(SearchAction).OnException();
@@ -93,9 +130,13 @@ public class MainViewModel : ViewModelBase
 
         MoveCommand = ReactiveCommand.CreateFromTask<Song>(MoveSong).OnException("Player Errored");
         CopyCommand = ReactiveCommand.CreateFromTask<Song>(CopySong).OnException("Player Errored");
+        DuplicateAsSmsModdedCommand = ReactiveCommand.CreateFromTask<Song>(DuplicateAsSmsModded).OnException("Player Errored");
+        RemoveJumpsCommand = ReactiveCommand.CreateFromTask<Song>(RemoveJumpsFromSm).OnException("Player Errored");
 
         PlayCommand = ReactiveCommand.Create<string>(PlayAction).OnException("Player Errored");
-        RefreshListCommand = ReactiveCommand.CreateFromTask(async () => { await RefreshListAction(); });
+        RefreshListCommand = ReactiveCommand.CreateFromTask(RefreshListAction);
+        RefreshRepositoryCommand = ReactiveCommand.CreateFromTask(RefreshRepositoryAction);
+        CopyFromRepositoryToInstanceCommand = ReactiveCommand.CreateFromTask<Song>(CopyFromRepositoryToInstance).OnException("Copy failed");
 
         OpenVideoCommand = ReactiveCommand.Create<string>((x) =>
         {
@@ -218,6 +259,51 @@ public class MainViewModel : ViewModelBase
             MovingPlayListSelection.Add(newSong);
         }
     }
+
+    private const string SmsModdedSuffix = " [SMS Modded]";
+
+    private async Task DuplicateAsSmsModded(Song song)
+    {
+        var parentDir = Path.GetDirectoryName(song.RootDirectory);
+        if (string.IsNullOrEmpty(parentDir) || !Directory.Exists(parentDir)) return;
+
+        var playlist = SelectedPlayList?.FolderName == parentDir ? SelectedPlayList : Items.FirstOrDefault(p => p.FolderName == parentDir);
+        if (playlist == null) return;
+
+        var baseName = song.PartialDirectory + SmsModdedSuffix;
+        var newFolderName = baseName;
+        var counter = 1;
+        while (Directory.Exists(Path.Combine(parentDir, newFolderName)))
+        {
+            counter++;
+            newFolderName = song.PartialDirectory + SmsModdedSuffix + " (" + counter + ")";
+        }
+
+        var destPath = Path.Combine(parentDir, newFolderName);
+        FileExtensions.CopyDirectory(song.RootDirectory, destPath);
+
+        if (!string.IsNullOrEmpty(song.SmFile))
+        {
+            var newSmPath = Path.Combine(destPath, Path.GetFileName(song.SmFile));
+            FileExtensions.AppendToTitleInStepFile(newSmPath, SmsModdedSuffix);
+        }
+        if (!string.IsNullOrEmpty(song.DwiFile))
+        {
+            var newDwiPath = Path.Combine(destPath, Path.GetFileName(song.DwiFile));
+            FileExtensions.AppendToTitleInStepFile(newDwiPath, SmsModdedSuffix);
+        }
+
+        var newSong = await Song.ParseSong(destPath);
+        playlist.Add(newSong);
+    }
+
+    private static Task RemoveJumpsFromSm(Song song)
+    {
+        if (string.IsNullOrEmpty(song.SmFile) || !File.Exists(song.SmFile)) return Task.CompletedTask;
+        FileExtensions.RemoveJumpsFromSmFile(song.SmFile);
+        return Task.CompletedTask;
+    }
+
     private void PlayAction(string x)
     {
         _mediaPlayer.PlayFile(x);
@@ -228,7 +314,6 @@ public class MainViewModel : ViewModelBase
         var directory = Path.Combine(StepManiaFolder, "Songs");
         if (Directory.Exists(directory))
         {
-
             var items = await PlayListActions.GetPlayLists(directory);
             _sourceItems.Edit(x =>
             {
@@ -236,6 +321,28 @@ public class MainViewModel : ViewModelBase
                 x.AddRange(items);
             });
         }
+    }
+
+    private async Task RefreshRepositoryAction()
+    {
+        if (string.IsNullOrEmpty(SongRepositoryFolder) || !Directory.Exists(SongRepositoryFolder)) return;
+        var items = await PlayListActions.GetPlayLists(SongRepositoryFolder);
+        _repositorySourceItems.Edit(x =>
+        {
+            x.Clear();
+            x.AddRange(items);
+        });
+    }
+
+    private async Task CopyFromRepositoryToInstance(Song song)
+    {
+        if (MovingPlayListSelection == null) return;
+        var targetDir = MovingPlayListSelection.FolderName;
+        if (!Directory.Exists(targetDir)) return;
+        var combinedTarget = Path.Combine(targetDir, song.PartialDirectory);
+        FileExtensions.CopyDirectory(song.RootDirectory, combinedTarget);
+        var newSong = await Song.ParseSong(combinedTarget);
+        MovingPlayListSelection.Add(newSong);
     }
 
 

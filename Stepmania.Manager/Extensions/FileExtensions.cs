@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -82,6 +82,97 @@ public static class FileExtensions
         {
             Directory.Delete(folderPath, true); 
         }
+    }
+
+    private const string TitleCode = "#TITLE:";
+
+    /// <summary>Appends a suffix to the #TITLE: line in an SM or DWI file (e.g. " [SMS Modded]").</summary>
+    public static void AppendToTitleInStepFile(string filePath, string suffix)
+    {
+        if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath) || string.IsNullOrEmpty(suffix)) return;
+        var lines = File.ReadAllLines(filePath);
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (lines[i].Contains(TitleCode, StringComparison.OrdinalIgnoreCase))
+            {
+                var line = lines[i];
+                var idx = line.IndexOf(TitleCode, StringComparison.OrdinalIgnoreCase);
+                var afterCode = line.Substring(idx + TitleCode.Length);
+                var title = afterCode.Replace(";", "").Trim();
+                if (title.EndsWith(suffix, StringComparison.Ordinal)) return;
+                lines[i] = TitleCode + title + suffix + ";";
+                break;
+            }
+        }
+        File.WriteAllLines(filePath, lines);
+    }
+
+    private static readonly char[] StepChars = { '1', '2', '3', '4' };
+
+    /// <summary>Removes jumps from an SM file: any row with 2+ simultaneous steps is reduced to a single step (leftmost).</summary>
+    public static void RemoveJumpsFromSmFile(string smFilePath)
+    {
+        if (string.IsNullOrEmpty(smFilePath) || !File.Exists(smFilePath) || !smFilePath.ExtensionIs("sm")) return;
+        var lines = File.ReadAllLines(smFilePath);
+        var inNotes = false;
+        var notesHeaderLinesLeft = 0;
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            if (line.Contains("#NOTES:", StringComparison.OrdinalIgnoreCase))
+            {
+                inNotes = true;
+                notesHeaderLinesLeft = 5; // chart type, description, difficulty, meter, groove
+                continue;
+            }
+            if (!inNotes) continue;
+            if (notesHeaderLinesLeft > 0)
+            {
+                notesHeaderLinesLeft--;
+                continue;
+            }
+            if (line.Trim() == ";")
+            {
+                inNotes = false;
+                continue;
+            }
+            if (line.Trim() == ",") continue;
+            var trimmed = line.Trim();
+            if (trimmed.Length is not (4 or 5 or 8)) continue;
+            var isNoteRow = true;
+            foreach (var c in trimmed)
+            {
+                if (c != '0' && c != '1' && c != '2' && c != '3' && c != '4' && c != 'M' && c != 'K' && c != 'L' && c != 'F')
+                {
+                    isNoteRow = false;
+                    break;
+                }
+            }
+            if (!isNoteRow) continue;
+            var stepCount = 0;
+            foreach (var c in trimmed)
+            {
+                if (c == '1' || c == '2' || c == '3' || c == '4') stepCount++;
+            }
+            if (stepCount <= 1) continue;
+            var firstStepIndex = -1;
+            for (var j = 0; j < trimmed.Length; j++)
+            {
+                if (trimmed[j] == '1' || trimmed[j] == '2' || trimmed[j] == '3' || trimmed[j] == '4')
+                {
+                    firstStepIndex = j;
+                    break;
+                }
+            }
+            if (firstStepIndex < 0) continue;
+            var sb = new System.Text.StringBuilder(trimmed.Length);
+            for (var j = 0; j < trimmed.Length; j++)
+                sb.Append(j == firstStepIndex ? trimmed[j] : '0');
+            var start = line.IndexOf(trimmed, StringComparison.Ordinal);
+            if (start >= 0)
+                lines[i] = line.Remove(start, trimmed.Length).Insert(start, sb.ToString());
+        }
+        File.WriteAllLines(smFilePath, lines);
     }
 
     public static void OpenFolder(string folderPath)

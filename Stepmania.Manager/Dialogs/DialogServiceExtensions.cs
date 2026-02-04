@@ -1,19 +1,17 @@
-﻿using System;
+using System;
 using System.Threading.Tasks;
-using Prism.Services.Dialogs;
+using Prism.Dialogs;
 using Stepmania.Manager.Dialogs.Confirmation;
 
 namespace Stepmania.Manager.Dialogs;
 
-
 public static class DialogServiceExtensions
-{   
-    public static IDialogService DialogSerivce { get; set; }
-
-    public static async Task IfConfirm(this Action act, string message = "Are you sure you want to do this")
+{
+    /// <summary>Shows a confirmation dialog; if user confirms, invokes the action.</summary>
+    public static async Task IfConfirm(this IDialogService dialog, string message, Action action)
     {
-        var result = await DialogSerivce.GetConfirmation(message);
-        if(result) act.Invoke();
+        if (await dialog.GetConfirmation(message))
+            action?.Invoke();
     }
     public static async Task<string> GetString(this IDialogService dialog, string message)
     {

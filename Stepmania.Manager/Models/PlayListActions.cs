@@ -1,7 +1,7 @@
 ﻿using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
-using Prism.Services.Dialogs;
+using Prism.Dialogs;
 using Stepmania.Manager.Dialogs;
 
 namespace Stepmania.Manager.Models;
